@@ -1,0 +1,53 @@
+alias: Effira Heat Pump – Price, Solar & Peak Plan
+description: >
+  Resubmits a 24-hour manual plan to Effira OPTi every 15 minutes.
+
+  Priority per slot:
+    1. Mölndal peak tariff (Nov–Mar weekday 07–19) → save
+    2. Solar export ≥ 300 W                        → boost
+    3. Cheap NordPool price (≤ 1.0 SEK/kWh)        → boost
+    4. Default                                      → Effira auto handles it
+
+  Requires:
+    - effira/effira_plan.py deployed to /config/effira/effira_plan.py on HA host
+    - /config/effira/.env populated (see config.env.example)
+    - shell_command.effira_update_plan defined in configuration.yaml (see below)
+
+  Add to configuration.yaml:
+    shell_command:
+      effira_update_plan: "python3 /config/effira/effira_plan.py >> /config/effira/effira_plan.log 2>&1"
+
+mode: single
+max_exceeded: silent
+
+trigger:
+  # Run every 15 min — aligns with Effira plan slot boundaries
+  - platform: time_pattern
+    minutes: "/15"
+  # Also run on HA restart so the plan is never stale after a reboot
+  - platform: homeassistant
+    event: start
+
+condition: []
+
+action:
+  - service: shell_command.effira_update_plan
+    response_variable: result
+
+  # Surface errors as a persistent notification in HA
+  - if:
+      - condition: template
+        value_template: "{{ result.returncode | int(0) != 0 }}"
+    then:
+      - service: persistent_notification.create
+        data:
+          title: "Effira plan error"
+          message: >
+            Script exited {{ result.returncode }}.
+            {{ result.stderr | truncate(400) }}
+          notification_id: effira_plan_error
+    else:
+      # Clear any previous error notification on success
+      - service: persistent_notification.dismiss
+        data:
+          notification_id: effira_plan_error
