@@ -1,0 +1,179 @@
+blueprint:
+  name: Effira OPTi — Price & Solar Optimization
+  description: >
+    Controls your Effira OPTi heat pump every 15 minutes based on electricity price
+    and/or solar export. Boost during cheap prices or solar surplus; stop during
+    capacity tariff peak hours (optional).
+
+    Requires the Effira OPTi integration to be installed and configured.
+  domain: automation
+  source_url: https://github.com/henrikharplinger-arndegothia/ha-effira/blob/main/blueprints/effira_optimize.yaml
+
+  input:
+    price_entity:
+      name: Electricity price sensor
+      description: >
+        Sensor showing the current spot price per kWh (e.g. NordPool, Tibber, Amber).
+        Any sensor whose state is a numeric price works.
+      selector:
+        entity:
+          domain: sensor
+
+    price_threshold:
+      name: Boost price threshold
+      description: Boost the heat pump when the current price is at or below this value.
+      default: 1.0
+      selector:
+        number:
+          min: 0
+          max: 20
+          step: 0.05
+          mode: box
+          unit_of_measurement: currency/kWh
+
+    solar_entity:
+      name: Solar / grid power sensor (optional)
+      description: >
+        Sensor showing net grid power in watts. Leave blank if you don't have solar.
+        GoodWe convention: negative value = exporting to grid.
+        Positive convention (e.g. Fronius, SolarEdge export meter): set threshold to a
+        positive number and map accordingly.
+      default: {}
+      selector:
+        entity:
+          domain: sensor
+
+    solar_threshold:
+      name: Solar export boost threshold (W)
+      description: Boost when solar export reaches this level. Ignored if no solar sensor set.
+      default: 300
+      selector:
+        number:
+          min: 0
+          max: 10000
+          step: 50
+          mode: slider
+          unit_of_measurement: W
+
+    peak_enabled:
+      name: Enable capacity tariff peak block
+      description: >
+        Stop the heat pump during peak tariff hours to avoid adding load when
+        your grid capacity fee is highest. Configure hours and months below.
+      default: false
+      selector:
+        boolean:
+
+    peak_start:
+      name: Peak block start time
+      default: "07:00:00"
+      selector:
+        time:
+
+    peak_end:
+      name: Peak block end time
+      default: "19:00:00"
+      selector:
+        time:
+
+    peak_weekdays_only:
+      name: Peak block on weekdays only
+      description: Most capacity tariffs only apply Monday–Friday.
+      default: true
+      selector:
+        boolean:
+
+    peak_months:
+      name: Peak tariff months
+      description: Months when the capacity tariff applies. Leave all off to block year-round.
+      default:
+        - "11"
+        - "12"
+        - "1"
+        - "2"
+        - "3"
+      selector:
+        select:
+          multiple: true
+          options:
+            - label: January
+              value: "1"
+            - label: February
+              value: "2"
+            - label: March
+              value: "3"
+            - label: April
+              value: "4"
+            - label: May
+              value: "5"
+            - label: June
+              value: "6"
+            - label: July
+              value: "7"
+            - label: August
+              value: "8"
+            - label: September
+              value: "9"
+            - label: October
+              value: "10"
+            - label: November
+              value: "11"
+            - label: December
+              value: "12"
+
+trigger:
+  - platform: time_pattern
+    minutes: "/15"
+
+variables:
+  v_price_entity: !input price_entity
+  v_price_threshold: !input price_threshold
+  v_solar_entity: !input solar_entity
+  v_solar_threshold: !input solar_threshold
+  v_peak_enabled: !input peak_enabled
+  v_peak_start: !input peak_start
+  v_peak_end: !input peak_end
+  v_peak_weekdays_only: !input peak_weekdays_only
+  v_peak_months: !input peak_months
+
+  current_price: "{{ states(v_price_entity) | float(99) }}"
+
+  solar_export_w: >
+    {% if v_solar_entity %}
+      {{ [0, -(states(v_solar_entity) | float(0))] | max }}
+    {% else %}
+      0
+    {% endif %}
+
+  is_peak: >
+    {% if v_peak_enabled %}
+      {% set t = now().strftime('%H:%M:%S') %}
+      {% set m = now().month | string %}
+      {% set weekday_ok = (not v_peak_weekdays_only) or now().weekday() < 5 %}
+      {{ m in v_peak_months and weekday_ok and t >= v_peak_start and t < v_peak_end }}
+    {% else %}
+      false
+    {% endif %}
+
+action:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ is_peak }}"
+        sequence:
+          - service: effira.stop
+
+      - conditions:
+          - condition: template
+            value_template: "{{ solar_export_w | float(0) >= v_solar_threshold }}"
+        sequence:
+          - service: effira.boost
+
+      - conditions:
+          - condition: template
+            value_template: "{{ current_price <= v_price_threshold }}"
+        sequence:
+          - service: effira.boost
+
+    default:
+      - service: effira.clear_plan
