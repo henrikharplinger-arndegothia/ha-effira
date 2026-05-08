@@ -26,10 +26,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def handle_clear_plan(call: ServiceCall):
         await coordinator.async_clear_plan()
 
-    hass.services.register(DOMAIN, "boost", handle_boost)
-    hass.services.register(DOMAIN, "stop", handle_stop)
-    hass.services.register(DOMAIN, "normal", handle_normal)
-    hass.services.register(DOMAIN, "clear_plan", handle_clear_plan)
+    hass.services.async_register(DOMAIN, "boost", handle_boost)
+    hass.services.async_register(DOMAIN, "stop", handle_stop)
+    hass.services.async_register(DOMAIN, "normal", handle_normal)
+    hass.services.async_register(DOMAIN, "clear_plan", handle_clear_plan)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
