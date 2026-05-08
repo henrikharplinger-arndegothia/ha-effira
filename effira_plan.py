@@ -151,7 +151,12 @@ def build_plan(nordpool_slots: list, solar_export_w: float) -> list[dict]:
     """
     now = datetime.now(timezone.utc)
     plan_start = _quantize_up(now)
-    plan_end   = plan_start + timedelta(hours=24)
+    # Cap end at 24h from *now* (not plan_start), rounded down to 15-min boundary
+    end_raw = now + timedelta(hours=24)
+    rem = end_raw.minute % 15
+    plan_end = (end_raw - timedelta(minutes=rem)).replace(second=0, microsecond=0)
+    if plan_end <= plan_start:
+        plan_end = plan_start + timedelta(minutes=15)
 
     # Build price lookup keyed by slot-start datetime
     price_map: dict[datetime, float] = {}
