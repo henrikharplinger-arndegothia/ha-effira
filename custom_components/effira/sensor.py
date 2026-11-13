@@ -1,5 +1,6 @@
 """Sensor entities for Effira OPTi."""
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.const import UnitOfTemperature
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -13,6 +14,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
         EffiraTempSensor(coordinator, config_entry),
         EffiraPlanSensor(coordinator, config_entry),
         EffiraTimelineSensor(coordinator, config_entry),
+        EffiraIndoorTempSensor(coordinator, config_entry),
     ])
 
 
@@ -182,3 +184,42 @@ class EffiraTimelineSensor(EffiraBaseSensor):
             "periods": self._periods() or [],
             "fresh": bool((self.coordinator.data or {}).get("timeline_ok")),
         }
+
+
+class EffiraIndoorTempSensor(EffiraBaseSensor):
+    """Measured indoor temperature from the house's primary Effira temperature sensor."""
+
+    _attr_state_class = "measurement"
+
+    @property
+    def unique_id(self):
+        return f"{self._config_entry.entry_id}_indoor_temperature"
+
+    @property
+    def name(self):
+        return "Effira Indoor Temperature"
+
+    @property
+    def native_unit_of_measurement(self):
+        return UnitOfTemperature.CELSIUS
+
+    @property
+    def device_class(self):
+        return SensorDeviceClass.TEMPERATURE
+
+    def _indoor(self):
+        return (self.coordinator.data or {}).get("indoor")
+
+    @property
+    def available(self):
+        return super().available and self._indoor() is not None
+
+    @property
+    def native_value(self):
+        indoor = self._indoor()
+        return indoor["temperature"] if indoor else None
+
+    @property
+    def extra_state_attributes(self):
+        indoor = self._indoor() or {}
+        return {"measured_at": indoor.get("measured_at"), "sensor_id": indoor.get("sensor_id")}

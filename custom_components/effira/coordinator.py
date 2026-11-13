@@ -1,6 +1,6 @@
 """DataUpdateCoordinator for Effira OPTi.
 
-Polls currentStatus, referencetemperature, plan/manual and the OPTi timeline (the 24 h
+Polls currentStatus, referencetemperature, plan/manual, the indoor temperature and the OPTi timeline (the 24 h
 plan OPTi makes and adapts during the day; same endpoint as the Effira app) every 5 minutes.
 Provides async_action() and async_clear_plan() for HA services to call.
 """
@@ -28,6 +28,7 @@ class EffiraCoordinator(DataUpdateCoordinator):
         )
         self.config_entry = config_entry
         self._timeline_warned = False
+        self._indoor_warned = False
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -70,7 +71,37 @@ class EffiraCoordinator(DataUpdateCoordinator):
         ref_temp = self._get(token, f"/assets/{asset_id}/referencetemperature")
         manual_plan = self._get(token, f"/assets/{asset_id}/plan/manual")
         timeline = self._fetch_timeline(token, asset_id)
-        return status, ref_temp, manual_plan, timeline
+        indoor = self._fetch_indoor(token, asset_id)
+        return status, ref_temp, manual_plan, timeline, indoor
+
+    def _fetch_indoor(self, token, asset_id):
+        """Latest reading of the asset's primary indoor temperature sensor (tempsensor/latest).
+
+        Optional: returns None on any error or when the API answers 204 (no reading in 30 days).
+        """
+        try:
+            r = requests.get(
+                f"{EFFIRA_BASE}/api/v1/assets/{asset_id}/tempsensor/latest",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            if r.status_code == 204 or not r.content:
+                return None
+            data = r.json() or {}
+        except Exception as err:  # noqa: BLE001 — optional data
+            if not self._indoor_warned:
+                _LOGGER.warning("Effira indoor temperature not available: %s", err)
+                self._indoor_warned = True
+            return None
+        self._indoor_warned = False
+        if not isinstance(data.get("temperature"), (int, float)):
+            return None
+        return {
+            "temperature": round(float(data["temperature"]), 2),
+            "measured_at": data.get("timeStamp"),
+            "sensor_id": data.get("sensorId"),
+        }
 
     def _fetch_timeline(self, token, asset_id):
         """OPTi plan: past 12 h + next 36 h. Optional — failure never breaks the other sensors.
@@ -168,7 +199,7 @@ class EffiraCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         asset_id = self.config_entry.data["asset_id"]
         try:
-            status, ref_temp, manual_plan, timeline = await self.hass.async_add_executor_job(
+            status, ref_temp, manual_plan, timeline, indoor = await self.hass.async_add_executor_job(
                 self._fetch_all, asset_id
             )
 
@@ -201,6 +232,7 @@ class EffiraCoordinator(DataUpdateCoordinator):
                 # None = endpoint unavailable this poll → keep the last good timeline
                 "timeline": timeline if timeline is not None else (self.data or {}).get("timeline"),
                 "timeline_ok": timeline is not None,
+                "indoor": indoor,
                 "manual_action": (self.data or {}).get("manual_action"),
                 "last_action_at": (self.data or {}).get("last_action_at"),
             }
