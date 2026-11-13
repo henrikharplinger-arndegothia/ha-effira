@@ -1,11 +1,15 @@
 {
   "domain": "effira",
   "name": "Effira OPTi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "documentation": "https://github.com/henrikharplinger-arndegothia/ha-effira",
   "issue_tracker": "https://github.com/henrikharplinger-arndegothia/ha-effira/issues",
-  "requirements": ["requests>=2.28.0"],
-  "codeowners": ["@henrikharplinger-arndegothia"],
+  "requirements": [
+    "requests>=2.28.0"
+  ],
+  "codeowners": [
+    "@henrikharplinger-arndegothia"
+  ],
   "iot_class": "cloud_polling",
   "config_flow": true
 }
