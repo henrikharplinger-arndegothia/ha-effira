@@ -137,7 +137,7 @@ class EffiraTimelineSensor(EffiraBaseSensor):
     """OPTi's own plan (Effira app timeline). State = mode right now: boost / stop / normal.
 
     Attribute `periods`: non-normal periods for the past 12 h and next 36 h,
-    [{start, end, mode, reason, state}] — for plan graphs (e.g. apexcharts-card).
+    [{start, end, mode, reason, sg_ready}] — for plan graphs (e.g. apexcharts-card).
     """
 
     @property

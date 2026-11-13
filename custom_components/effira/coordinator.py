@@ -75,7 +75,7 @@ class EffiraCoordinator(DataUpdateCoordinator):
     def _fetch_timeline(self, token, asset_id):
         """OPTi plan: past 12 h + next 36 h. Optional — failure never breaks the other sensors.
 
-        Returns a compact list of non-normal periods [{start, end, mode, reason, state}] with
+        Returns a compact list of boost/stop periods [{start, end, mode, reason, sg_ready}] with
         adjacent equal periods merged, or None if the endpoint is unavailable.
         """
         now = datetime.now(timezone.utc)
@@ -97,16 +97,18 @@ class EffiraCoordinator(DataUpdateCoordinator):
             return None
         self._timeline_warned = False
         periods = []
+        # item.state is the action (boost / stop); control.mode is the SG Ready signal sent to
+        # the heat pump (e.g. SG-READY-1 = blocked, SG-READY-2 = normal). Verified 2026-11-13.
         for item in sorted(data.get("timeline") or [], key=lambda i: i.get("start") or ""):
-            control = item.get("control") or {}
-            mode = control.get("mode") or "normal"
-            if control.get("idle") or mode == "normal":
+            action = item.get("state")
+            if action not in ("boost", "stop"):
                 continue
+            control = item.get("control") or {}
             reason = item.get("reason") or (item.get("priority") or {}).get("name")
-            p = {"start": item.get("start"), "end": item.get("end"), "mode": mode,
-                 "reason": reason, "state": item.get("state")}
+            p = {"start": item.get("start"), "end": item.get("end"), "mode": action,
+                 "reason": reason, "sg_ready": control.get("mode")}
             last = periods[-1] if periods else None
-            if last and last["end"] == p["start"] and last["mode"] == mode and last["reason"] == reason:
+            if last and last["end"] == p["start"] and last["mode"] == action and last["reason"] == reason:
                 last["end"] = p["end"]
             else:
                 periods.append(p)
