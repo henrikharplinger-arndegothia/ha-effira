@@ -5,6 +5,7 @@ plan OPTi makes and adapts during the day; same endpoint as the Effira app) ever
 Provides async_action() and async_clear_plan() for HA services to call.
 """
 import logging
+import threading
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -15,6 +16,7 @@ from .const import DOMAIN, EFFIRA_BASE
 _LOGGER = logging.getLogger(__name__)
 
 SCAN_INTERVAL = timedelta(minutes=5)
+MAX_AHEAD = timedelta(hours=24)  # the API refuses periods ending later than now + 24 h
 
 
 class EffiraCoordinator(DataUpdateCoordinator):
@@ -29,6 +31,9 @@ class EffiraCoordinator(DataUpdateCoordinator):
         self.config_entry = config_entry
         self._timeline_warned = False
         self._indoor_warned = False
+        self._plan_lock = threading.Lock()  # serialises read-merge-post of plan/manual
+        self._manual_action = None
+        self._last_action_at = None
 
     # ── Auth ──────────────────────────────────────────────────────────────────
 
@@ -95,6 +100,9 @@ class EffiraCoordinator(DataUpdateCoordinator):
                 self._indoor_warned = True
             return None
         self._indoor_warned = False
+        self._plan_lock = threading.Lock()  # serialises read-merge-post of plan/manual
+        self._manual_action = None
+        self._last_action_at = None
         if not isinstance(data.get("temperature"), (int, float)):
             return None
         return {
@@ -145,23 +153,68 @@ class EffiraCoordinator(DataUpdateCoordinator):
                 periods.append(p)
         return periods
 
-    def _submit_action(self, asset_id, action):
-        token = self._effira_token()
+    def _quantize_down(self, dt):
+        return dt.replace(minute=dt.minute - dt.minute % 15, second=0, microsecond=0)
+
+    @staticmethod
+    def _parse(ts):
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+    def _submit_action(self, asset_id, action, start=None, end=None, replace=False):
+        """Book `action` for [start, end) on 15-min boundaries (default: the next 15 min).
+
+        Unless replace=True, the existing future manual periods are kept: they are read from
+        plan/manual, the new window is cut out of them, and the merged list is posted back, so
+        each booking adds to the plan instead of overwriting it.
+        """
         now = datetime.now(timezone.utc)
-        start = self._quantize_up(now)
-        end = start + timedelta(minutes=15)
+        # validate what was asked for before rounding to the 15-min grid
+        if start and end and end <= start:
+            raise ValueError(f"end ({end}) must be after start ({start})")
+        if end and end <= now:
+            raise ValueError(f"end ({end}) is already past")
+        start = self._quantize_down(start) if start else self._quantize_up(now)
+        end = self._quantize_up(end) if end else start + timedelta(minutes=15)
+        if end <= now:
+            raise ValueError(f"window {start}–{end} is already over")
+        if end > now + MAX_AHEAD:
+            raise ValueError(f"end {end} is more than 24 h ahead (Effira API limit)")
+        with self._plan_lock:
+            return self._merge_and_post(asset_id, action, start, end, replace, now)
+
+    def _merge_and_post(self, asset_id, action, start, end, replace, now):
+        token = self._effira_token()
+        periods = []
+        if not replace:
+            current = self._get(token, f"/assets/{asset_id}/plan/manual") or {}
+            for p in current.get("rawPeriods") or []:
+                p_start, p_end = self._parse(p["start"]), self._parse(p["end"])
+                if p_end <= now:
+                    continue  # finished
+                # keep the parts of an existing period that lie outside the new window
+                for a, b in ((p_start, min(p_end, start)), (max(p_start, end), p_end)):
+                    if a < b:
+                        periods.append({"start": self._fmt(a), "end": self._fmt(b), "action": p["action"]})
+        periods.append({"start": self._fmt(start), "end": self._fmt(end), "action": action})
+        periods.sort(key=lambda p: p["start"])
         r = requests.post(
             f"{EFFIRA_BASE}/api/v1/assets/{asset_id}/plan/manual",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
             },
-            json={"periods": [{"start": self._fmt(start), "end": self._fmt(end), "action": action}]},
+            json={"periods": periods},
             timeout=15,
         )
         r.raise_for_status()
+        _LOGGER.info("Effira manual plan posted: %s", periods)
+        return periods
 
     def _clear_plan(self, asset_id):
+        with self._plan_lock:
+            self._post_empty(asset_id)
+
+    def _post_empty(self, asset_id):
         token = self._effira_token()
         r = requests.post(
             f"{EFFIRA_BASE}/api/v1/assets/{asset_id}/plan/manual",
@@ -176,23 +229,19 @@ class EffiraCoordinator(DataUpdateCoordinator):
 
     # ── Service entrypoints ───────────────────────────────────────────────────
 
-    async def async_action(self, action):
+    async def async_action(self, action, start=None, end=None, replace=False):
         asset_id = self.config_entry.data["asset_id"]
-        await self.hass.async_add_executor_job(self._submit_action, asset_id, action)
-        self.async_set_updated_data({
-            **(self.data or {}),
-            "manual_action": action,
-            "last_action_at": datetime.now(timezone.utc).isoformat(),
-        })
+        await self.hass.async_add_executor_job(self._submit_action, asset_id, action, start, end, replace)
+        self._manual_action = action
+        self._last_action_at = datetime.now(timezone.utc).isoformat()
+        await self.async_refresh()
 
     async def async_clear_plan(self):
         asset_id = self.config_entry.data["asset_id"]
         await self.hass.async_add_executor_job(self._clear_plan, asset_id)
-        self.async_set_updated_data({
-            **(self.data or {}),
-            "manual_action": None,
-            "last_action_at": datetime.now(timezone.utc).isoformat(),
-        })
+        self._manual_action = None
+        self._last_action_at = datetime.now(timezone.utc).isoformat()
+        await self.async_refresh()
 
     # ── Poll ──────────────────────────────────────────────────────────────────
 
@@ -233,8 +282,8 @@ class EffiraCoordinator(DataUpdateCoordinator):
                 "timeline": timeline if timeline is not None else (self.data or {}).get("timeline"),
                 "timeline_ok": timeline is not None,
                 "indoor": indoor,
-                "manual_action": (self.data or {}).get("manual_action"),
-                "last_action_at": (self.data or {}).get("last_action_at"),
+                "manual_action": self._manual_action,
+                "last_action_at": self._last_action_at,
             }
 
         except Exception as err:

@@ -36,5 +36,65 @@
       "no_assets": "No Effira OPTi installations found for your account.",
       "cannot_create_api_key": "Could not create an API key. Please try the manual method."
     }
+  },
+  "services": {
+    "stop": {
+      "name": "Stop heat pump",
+      "description": "Book a stop (SG Ready blocked) for a time window.",
+      "fields": {
+        "start": {
+          "name": "Start",
+          "description": "When the window starts (rounded down to 15 min). Default: the next quarter hour."
+        },
+        "end": {
+          "name": "End",
+          "description": "When the window ends (rounded up to 15 min, at most 24 h from now). Default: start + 15 min."
+        },
+        "replace": {
+          "name": "Replace plan",
+          "description": "Replace all booked manual periods instead of adding to them."
+        }
+      }
+    },
+    "boost": {
+      "name": "Boost heat pump",
+      "description": "Book a boost for a time window.",
+      "fields": {
+        "start": {
+          "name": "Start",
+          "description": "When the window starts (rounded down to 15 min). Default: the next quarter hour."
+        },
+        "end": {
+          "name": "End",
+          "description": "When the window ends (rounded up to 15 min, at most 24 h from now). Default: start + 15 min."
+        },
+        "replace": {
+          "name": "Replace plan",
+          "description": "Replace all booked manual periods instead of adding to them."
+        }
+      }
+    },
+    "normal": {
+      "name": "Normal operation",
+      "description": "Book normal operation for a time window (overrides OPTi).",
+      "fields": {
+        "start": {
+          "name": "Start",
+          "description": "When the window starts (rounded down to 15 min). Default: the next quarter hour."
+        },
+        "end": {
+          "name": "End",
+          "description": "When the window ends (rounded up to 15 min, at most 24 h from now). Default: start + 15 min."
+        },
+        "replace": {
+          "name": "Replace plan",
+          "description": "Replace all booked manual periods instead of adding to them."
+        }
+      }
+    },
+    "clear_plan": {
+      "name": "Clear manual plan",
+      "description": "Remove all manually booked periods."
+    }
   }
 }

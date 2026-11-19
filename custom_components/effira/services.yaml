@@ -1,0 +1,17 @@
+stop: &window
+  fields:
+    start:
+      example: "2026-11-19 17:00"
+      selector:
+        datetime:
+    end:
+      example: "2026-11-19 19:00"
+      selector:
+        datetime:
+    replace:
+      default: false
+      selector:
+        boolean:
+boost: *window
+normal: *window
+clear_plan:
