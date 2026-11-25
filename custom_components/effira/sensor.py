@@ -86,7 +86,7 @@ class EffiraOnlineSensor(EffiraBaseSensor):
 
 
 class EffiraTempSensor(EffiraBaseSensor):
-    """Reference temperature as reported by the Effira system."""
+    """Temperature OPTi steers toward: the user's manual value in manual mode, else Effira's auto reference."""
 
     @property
     def unique_id(self):
@@ -109,6 +109,11 @@ class EffiraTempSensor(EffiraBaseSensor):
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get("ref_temp")
+
+    @property
+    def extra_state_attributes(self):
+        data = self.coordinator.data or {}
+        return {"mode": data.get("ref_mode"), "auto_reference": data.get("ref_auto")}
 
 
 class EffiraPlanSensor(EffiraBaseSensor):

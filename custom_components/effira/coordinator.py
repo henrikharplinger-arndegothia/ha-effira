@@ -1,6 +1,6 @@
 """DataUpdateCoordinator for Effira OPTi.
 
-Polls currentStatus, referencetemperature, plan/manual, the indoor temperature and the OPTi timeline (the 24 h
+Polls currentStatus, referencetemperature, the asset's temperatureSettings, plan/manual, the indoor temperature and the OPTi timeline (the 24 h
 plan OPTi makes and adapts during the day; same endpoint as the Effira app) every 5 minutes.
 Provides async_action() and async_clear_plan() for HA services to call.
 """
@@ -77,7 +77,18 @@ class EffiraCoordinator(DataUpdateCoordinator):
         manual_plan = self._get(token, f"/assets/{asset_id}/plan/manual")
         timeline = self._fetch_timeline(token, asset_id)
         indoor = self._fetch_indoor(token, asset_id)
-        return status, ref_temp, manual_plan, timeline, indoor
+        temp_settings = self._fetch_temp_settings(token, asset_id)
+        return status, ref_temp, manual_plan, timeline, indoor, temp_settings
+
+    def _fetch_temp_settings(self, token, asset_id):
+        """The asset's temperatureSettings {mode: auto|manual, reference}. Optional: None on any error."""
+        try:
+            asset = self._get(token, f"/assets/{asset_id}") or {}
+        except Exception as err:  # noqa: BLE001 — optional data
+            _LOGGER.debug("Effira asset settings not available: %s", err)
+            return None
+        ts = asset.get("temperatureSettings")
+        return ts if isinstance(ts, dict) else None
 
     def _fetch_indoor(self, token, asset_id):
         """Latest reading of the asset's primary indoor temperature sensor (tempsensor/latest).
@@ -248,7 +259,7 @@ class EffiraCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         asset_id = self.config_entry.data["asset_id"]
         try:
-            status, ref_temp, manual_plan, timeline, indoor = await self.hass.async_add_executor_job(
+            status, ref_temp, manual_plan, timeline, indoor, temp_settings = await self.hass.async_add_executor_job(
                 self._fetch_all, asset_id
             )
 
@@ -263,9 +274,11 @@ class EffiraCoordinator(DataUpdateCoordinator):
                 prio = action_obj.get("prio") or {}
                 last_action_source = prio.get("type")
 
-            ref_temp_value = None
-            if ref_temp:
-                ref_temp_value = ref_temp.get("value")
+            auto_ref = ref_temp.get("value") if ref_temp else None
+            mode = (temp_settings or {}).get("mode")
+            manual_ref = (temp_settings or {}).get("reference")
+            # The temperature OPTi steers toward: the user's own value in manual mode, else the auto one.
+            ref_temp_value = manual_ref if mode == "manual" and isinstance(manual_ref, (int, float)) else auto_ref
 
             active_periods = []
             if manual_plan:
@@ -277,6 +290,8 @@ class EffiraCoordinator(DataUpdateCoordinator):
                 "last_action": last_action,
                 "last_action_source": last_action_source,
                 "ref_temp": ref_temp_value,
+                "ref_mode": mode,
+                "ref_auto": auto_ref,
                 "active_periods": active_periods,
                 # None = endpoint unavailable this poll → keep the last good timeline
                 "timeline": timeline if timeline is not None else (self.data or {}).get("timeline"),
